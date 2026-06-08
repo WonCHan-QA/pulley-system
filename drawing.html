@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>도면 조회 — 한국정공</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+:root{--bg:#0a0c10;--surface:#111318;--surface2:#181c24;--border:#2a3040;--accent:#00d4ff;--green:#00e676;--text:#e8edf5;--text2:#8899aa;--text3:#556070}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 16px}
+.header{text-align:center;margin-bottom:28px;padding-top:20px}
+.logo-ring{width:60px;height:60px;background:linear-gradient(135deg,#00d4ff,#0099cc);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:12px}
+h1{font-size:18px;font-weight:900}
+.sub{color:var(--text2);font-size:13px;margin-top:4px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:100%;max-width:460px;padding:24px;margin-bottom:16px}
+.card-title{font-size:11px;font-weight:700;color:var(--text2);letter-spacing:1px;text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.card-title::after{content:'';flex:1;height:1px;background:var(--border)}
+.field{margin-bottom:12px}
+.field-lbl{font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px}
+.field-val{font-size:15px}
+.field-mono{font-family:'JetBrains Mono',monospace}
+.badge{display:inline-block;padding:3px 10px;border-radius:5px;font-size:12px;font-weight:700}
+.b-rev{background:rgba(255,215,64,.1);color:#ffd740;border:1px solid rgba(255,215,64,.2)}
+.b-blue{background:rgba(0,212,255,.1);color:#00d4ff;border:1px solid rgba(0,212,255,.2)}
+.btn-draw{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;background:var(--accent);color:#000;border:none;border-radius:10px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;text-decoration:none;transition:background .15s;margin-top:4px}
+.btn-draw:hover{background:#00bbee}
+.btn-hist{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:11px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;transition:all .15s;margin-top:8px}
+.btn-hist:hover{border-color:var(--accent);color:var(--accent)}
+.rev-list{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.rev-item{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;position:relative;padding-left:16px}
+.rev-item::before{content:'';position:absolute;left:6px;top:0;bottom:0;width:2px;background:var(--border);border-radius:2px}
+.rev-item.latest::before{background:var(--green)}
+.rev-hd{display:flex;justify-content:space-between;margin-bottom:4px}
+.rev-ver{font-weight:700;font-size:12px;font-family:'JetBrains Mono',monospace}
+.rev-dt{font-size:10px;color:var(--text3)}
+.rev-desc{font-size:11px;color:var(--text2)}
+.loading{text-align:center;padding:48px;color:var(--text2)}
+.err{text-align:center;padding:48px;color:#ff7070}
+.err-icon{font-size:40px;margin-bottom:12px}
+.footer{color:var(--text3);font-size:11px;text-align:center;margin-top:8px}
+.status-ok{color:var(--green)}
+.status-warn{color:#ffd740}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo-ring">⚙</div>
+  <h1>한국정공 풀리 도면</h1>
+  <div class="sub">QR코드 스캔 — 최신 도면 조회</div>
+</div>
+
+<div id="loading" class="loading">📡 도면 정보를 불러오는 중...</div>
+<div id="main" style="display:none;width:100%;max-width:460px"></div>
+<div id="err" class="err" style="display:none">
+  <div class="err-icon">❌</div>
+  <div id="err-msg">도면을 찾을 수 없습니다</div>
+</div>
+
+<div class="footer">한국정공 풀리 도면관리 시스템 · 무단 배포 금지</div>
+
+<script>
+const CFG_KEY = 'hkjg_config';
+
+function getCfg() {
+  try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch(_){ return {}; }
+}
+
+async function apiCall(url, body) {
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(body), redirect:'follow' });
+  return JSON.parse(await r.text());
+}
+
+async function loadDrawing() {
+  const params = new URLSearchParams(window.location.search);
+  const partNo = params.get('pn');
+
+  if (!partNo) {
+    showErr('Part No.가 지정되지 않았습니다. QR코드를 다시 스캔해 주세요.');
+    return;
+  }
+
+  const cfg = getCfg();
+
+  let pulley = null;
+  let revs   = [];
+
+  if (cfg.apiUrl) {
+    try {
+      const pr = await apiCall(cfg.apiUrl, { action: 'getPulleys' });
+      if (pr.ok) pulley = pr.data.find(p => p.partNo === partNo);
+      const rr = await apiCall(cfg.apiUrl, { action: 'getRevisions', partNo });
+      if (rr.ok) revs = rr.data;
+      // Log access
+      apiCall(cfg.apiUrl, { action:'logAccess', partNo, action_:'qr_scan', user:'QR스캔', role:'guest' }).catch(()=>{});
+    } catch(e) {
+      // Fall back to local
+    }
+  }
+
+  // Fallback: search local storage backup
+  if (!pulley) {
+    const localData = JSON.parse(localStorage.getItem('hkjg_pulley_data') || '[]');
+    pulley = localData.find(p => p.partNo === partNo);
+  }
+
+  if (!pulley) {
+    showErr(`Part No. "${partNo}" 를 찾을 수 없습니다.`);
+    return;
+  }
+
+  document.getElementById('loading').style.display = 'none';
+  const main = document.getElementById('main');
+  main.style.display = 'block';
+
+  const drawBtn = pulley.drawingUrl
+    ? `<a href="${pulley.drawingUrl}" target="_blank" class="btn-draw">📄 최신 도면 열기 (Google Drive)</a>`
+    : `<div class="btn-draw" style="background:var(--surface2);color:var(--text3);cursor:default">📄 도면 링크 미등록</div>`;
+
+  const revHtml = revs.length
+    ? revs.slice(0,5).map((r,i) => `
+      <div class="rev-item ${i===0?'latest':''}">
+        <div class="rev-hd"><span class="rev-ver">${r.prevVer||'—'} → ${r.newVer}</span><span class="rev-dt">${r.date}</span></div>
+        <div class="rev-desc">${r.desc}</div>
+        <div class="rev-desc" style="margin-top:2px">개정자: ${r.author}</div>
+      </div>`).join('')
+    : '<div style="color:var(--text3);font-size:13px;padding:8px 0">개정이력 없음</div>';
+
+  main.innerHTML = `
+    <div class="card">
+      <div class="card-title">풀리 기본 정보</div>
+      <div class="field"><div class="field-lbl">차종명</div><div class="field-val">${pulley.carLine||'—'}</div></div>
+      <div class="field"><div class="field-lbl">Part No.</div><div class="field-val field-mono">${pulley.partNo}</div></div>
+      <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><div class="field-lbl">타입</div><span class="badge b-blue">${pulley.type}</span></div>
+        <div><div class="field-lbl">단조방법</div><div class="field-val">${pulley.forgingMethod}</div></div>
+      </div>
+      <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><div class="field-lbl">외경</div><div class="field-val field-mono" style="font-size:13px">${pulley.outerDia}</div></div>
+        <div><div class="field-lbl">납품처</div><div class="field-val">${pulley.customer||'—'}</div></div>
+      </div>
+      <div class="field"><div class="field-lbl">현재 도면 버전</div><span class="badge b-rev" style="font-size:14px;padding:4px 12px">${pulley.version||'Rev.A'}</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">도면 다운로드</div>
+      ${drawBtn}
+      <a href="index.html" class="btn-hist">🏠 관리 시스템으로 이동</a>
+    </div>
+    <div class="card">
+      <div class="card-title">개정이력</div>
+      <div class="rev-list">${revHtml}</div>
+    </div>`;
+}
+
+function showErr(msg) {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('err').style.display = 'block';
+  document.getElementById('err-msg').textContent = msg;
+}
+
+loadDrawing();
+</script>
+</body>
+</html>
